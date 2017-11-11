@@ -1,0 +1,73 @@
+service: slackbot
+
+provider:
+  name: aws
+  runtime: python3.6
+  region: us-west-2
+  stage: dev
+  environment:
+    DYNAMODB_TABLE: ${self:service}-${opt:stage, self:provider.stage}
+  iamRoleStatements:
+    - Effect: Allow
+      Action:
+        - dynamodb:Query
+        - dynamodb:Scan
+        - dynamodb:GetItem
+        - dynamodb:PutItem
+        - dynamodb:UpdateItem
+        - dynamodb:DeleteItem
+      Resource: "arn:aws:dynamodb:${opt:region, self:provider.region}:*:table/${self:custom.table}"
+
+custom:
+  region: ${self:provider.region}
+  stage: ${opt:stage, self:provider.stage}
+  prefix: ${self:custom.stage}-${self:service}
+  sns: ${self:custom.prefix}-notify-user
+  table: ${self:custom.prefix}-queue
+
+functions:
+  webhook-handler:
+    handler: index.webhook
+    name: ${self:service}-${self:provider.stage}-webhook-handler
+    timeout: 30    
+    environment:
+      snsArn: { "Fn::Join" : ["", ["arn:aws:sns:${self:custom.region}:", { "Ref" : "AWS::AccountId" }, ":${self:custom.sns}" ] ]  }
+      table: ${self:custom.table}
+    events:
+      - http:
+          path: ${self:service}/webhook
+          method: post
+          integration: lambda
+  slack-notifier:
+    handler: index.notify_user
+    name: ${self:service}-${self:provider.stage}-slack-notifier
+    timeout: 30
+    environment:
+      bottoken: ""
+    events:
+      - sns: ${self:custom.sns}
+
+resources:
+  Resources:
+    TodosDynamoDbTable:
+      Type: 'AWS::DynamoDB::Table'
+      DeletionPolicy: Retain
+      Properties:
+        AttributeDefinitions:
+          -
+            AttributeName: env
+            AttributeType: S
+          -
+            AttributeName: time
+            AttributeType: S
+        KeySchema:
+          -
+            AttributeName: env
+            KeyType: HASH
+          -
+            AttributeName: time
+            KeyType: RANGE
+        ProvisionedThroughput:
+          ReadCapacityUnits: 1
+          WriteCapacityUnits: 1
+        TableName: ${self:custom.table}
